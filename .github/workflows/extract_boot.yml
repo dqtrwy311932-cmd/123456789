@@ -1,4 +1,4 @@
-name: Xiaomi Boot Extractor (Release Version)
+name: Xiaomi Boot Extractor (Streaming)
 
 on:
   workflow_dispatch:
@@ -14,39 +14,39 @@ on:
         required: true
 
 jobs:
-  extract_and_upload:
+  extract:
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: 🚀 提取镜像
+      - name: 🚀 流式提取镜像
         run: |
           mkdir -p output
-          mkdir -p temp_extract
-          echo "[*] 正在下载并解压 ROM..."
+          echo "[*] 开始流式扫描 ROM: ${{ github.event.inputs.rom_url }}"
           
-          # 1. 下载并解压所有包含 boot 的 img
+          # 使用 curl 下载并直接通过管道传输给 tar
+          # --wildcards 用于匹配文件名
+          # --transform='s|.*/||' 移除所有前置路径，直接放进 output
+          # --ignore-command-error 防止因为部分文件未找到而中断
           curl -L "${{ github.event.inputs.rom_url }}" | tar -zxvf - \
             --wildcards '*boot.img' \
-            -C temp_extract || echo "提取结束"
+            --transform='s|.*/||' \
+            -C output/ || echo "[!] 管道提取结束 (部分文件可能已捕获)"
 
-          # 2. 强制搜索所有层级，移动到 output 目录
-          # 这一步保证了无论 ROM 路径多深，都能抓到文件
-          find temp_extract -name "*.img" -exec mv {} output/ \;
-
-          # 3. 重命名并清理
+          # 检查提取结果
           SAFE_MODEL=$(echo "${{ github.event.inputs.model_name }}" | sed 's/ /_/g')
           SAFE_VERSION=$(echo "${{ github.event.inputs.rom_version }}" | sed 's/ /_/g')
           
           cd output
           if [ -n "$(ls -A .)" ]; then
+            echo "[✓] 成功提取以下文件:"
             for f in *.img; do
               mv "$f" "${SAFE_MODEL}__${SAFE_VERSION}__${f}"
+              ls -lh "${SAFE_MODEL}__${SAFE_VERSION}__${f}"
             done
-            echo "[*] 提取成功，准备上传"
           else
-            echo "[!] 错误：未发现任何 img 文件"
+            echo "[!] 错误：流式搜索未发现 boot.img 或 init_boot.img"
             exit 1
           fi
 
@@ -55,7 +55,6 @@ jobs:
         with:
           tag_name: firmware_storage
           files: output/*.img
-          # 即使 tag 存在也更新内容
           append_body: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
