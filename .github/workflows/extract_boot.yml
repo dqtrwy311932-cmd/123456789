@@ -1,0 +1,58 @@
+name: Xiaomi Boot Extractor (Git Push)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rom_url:
+        description: 'ROM URL'
+        required: true
+      model_name:
+        description: '机型名称'
+        required: true
+      rom_version:
+        description: '版本号'
+        required: true
+
+jobs:
+  extract_and_push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: ⬇️ 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🚀 精准提取镜像
+        run: |
+          # 1. 处理保存路径，防止空格导致报错
+          SAFE_MODEL=$(echo "${{ github.event.inputs.model_name }}" | sed 's/ /_/g')
+          SAFE_VERSION=$(echo "${{ github.event.inputs.rom_version }}" | sed 's/ /_/g')
+          TARGET_DIR="firmware/${SAFE_MODEL}/${SAFE_VERSION}"
+          mkdir -p "$TARGET_DIR"
+
+          echo "[*] 正在从 ROM 提取 boot 和 init_boot..."
+          
+          # 2. 核心：只解压 boot.img 和 init_boot.img
+          # 使用 --wildcards 匹配所有子目录下的同名文件
+          # 使用 --transform 将解压出的文件直接拍平放入目标目录，不保留原 ROM 路径
+          curl -L "${{ github.event.inputs.rom_url }}" | tar -zxvf - \
+            --wildcards '*/boot.img' '*/init_boot.img' \
+            --transform='s|.*/||' \
+            -C "$TARGET_DIR" || echo "提示：部分文件（可能是 init_boot）在当前 ROM 中不存在"
+
+      - name: 📤 强制推送到仓库
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # 只添加 firmware 目录，保持根目录整洁
+          git add firmware/
+          
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "Add: ${{ github.event.inputs.model_name }} ($SAFE_VERSION)"
+            # 使用 --force 确保并发任务不会因为提交历史冲突而失败
+            git push origin main --force
+          else
+            echo "没有提取到任何新文件，跳过提交。"
+          fi
