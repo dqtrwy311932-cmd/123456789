@@ -1,4 +1,4 @@
-name: Xiaomi Boot Extractor (Streaming)
+name: Xiaomi Boot Extractor (Test Mode)
 
 on:
   workflow_dispatch:
@@ -7,10 +7,10 @@ on:
         description: 'ROM URL'
         required: true
       model_name:
-        description: '机型名称'
+        description: '機型名稱'
         required: true
       rom_version:
-        description: '版本号'
+        description: '版本號'
         required: true
 
 jobs:
@@ -20,46 +20,43 @@ jobs:
       contents: write
 
     steps:
-      - name: 🚀 流式提取镜像
+      - name: 🚀 測試流式提取 (首個匹配即停止)
         run: |
-          mkdir -p output
-          mkdir -p temp_run
-          echo "[*] 开始流式扫描: ${{ github.event.inputs.rom_url }}"
+          mkdir -p output_test
+          echo "[*] 開始測試流式掃描: ${{ github.event.inputs.rom_url }}"
           
-          # 1. 管道提取到 temp_run 目录
+          # 1. 使用 --occurrence=1 找到第一個符合 *boot.img 的文件就停止
+          # 使用 --ignore-command-error 忽略因為管道提前關閉導致的 curl 報錯
           curl -L "${{ github.event.inputs.rom_url }}" | tar -zxvf - \
             --wildcards '*boot.img' \
-            -C temp_run/ || echo "[!] 管道传输结束"
+            --occurrence=1 \
+            || echo "[*] 已捕獲首個目標，管道已中斷 (這是預期行為)"
 
-          # 2. 深度搜索：将所有 img 移动到 output 根目录
-          find temp_run/ -name "*.img" -exec mv {} output/ \;
+          # 2. 暴力搜索當前目錄，將抓到的文件移入 output_test
+          echo "[*] 正在檢索捕獲的文件..."
+          find . -type f -name "*.img" -exec mv {} output_test/ \;
 
-          # 3. 重命名并清理
+          # 3. 處理與命名
           SAFE_MODEL=$(echo "${{ github.event.inputs.model_name }}" | sed 's/ /_/g')
           SAFE_VERSION=$(echo "${{ github.event.inputs.rom_version }}" | sed 's/ /_/g')
           
-          cd output
+          cd output_test
           if [ -n "$(ls -A .)" ]; then
-            echo "[✓] 成功提取文件列表:"
+            echo "[✓] 測試成功！已捕獲文件:"
             for f in *.img; do
-              # 排除掉 vendor_boot 等不想要的文件（如果你只需要 boot 和 init_boot）
-              if [[ "$f" == *"vendor_boot"* ]]; then
-                 rm "$f"
-                 continue
-              fi
-              mv "$f" "${SAFE_MODEL}__${SAFE_VERSION}__${f}"
-              ls -lh "${SAFE_MODEL}__${SAFE_VERSION}__${f}"
+              new_name="${SAFE_MODEL}__${SAFE_VERSION}__${f}"
+              mv "$f" "$new_name"
+              ls -lh "$new_name"
             done
           else
-            echo "[!] 错误：未在提取目录中发现有效的 img 文件"
+            echo "[!] 失敗：未能在流式掃描中捕獲任何鏡像"
             exit 1
           fi
 
-      - name: 📤 上传到 Release
+      - name: 📤 上傳到 Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: firmware_storage
-          files: output/*.img
-          append_body: true
+          files: output_test/*.img
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
