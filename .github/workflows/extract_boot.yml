@@ -20,34 +20,42 @@ jobs:
       contents: write
 
     steps:
-      - name: 🚀 提取并重命名
+      - name: 🚀 提取镜像
         run: |
           mkdir -p output
-          # 提取文件
+          mkdir -p temp_extract
+          echo "[*] 正在下载并解压 ROM..."
+          
+          # 1. 下载并解压所有包含 boot 的 img
           curl -L "${{ github.event.inputs.rom_url }}" | tar -zxvf - \
-            --wildcards '*/boot.img' '*/init_boot.img' \
-            --transform='s|.*/||' \
-            -C output || echo "Missing files"
+            --wildcards '*boot.img' \
+            -C temp_extract || echo "提取结束"
 
-          # 格式化名称：将空格转为下划线
+          # 2. 强制搜索所有层级，移动到 output 目录
+          # 这一步保证了无论 ROM 路径多深，都能抓到文件
+          find temp_extract -name "*.img" -exec mv {} output/ \;
+
+          # 3. 重命名并清理
           SAFE_MODEL=$(echo "${{ github.event.inputs.model_name }}" | sed 's/ /_/g')
           SAFE_VERSION=$(echo "${{ github.event.inputs.rom_version }}" | sed 's/ /_/g')
-
-          # 核心改动：重命名文件为 "机型__版本__文件名.img"
-          # 例如：Xiaomi_12__V14.0.1__boot.img
+          
           cd output
-          for f in *.img; do
-            if [ -f "$f" ]; then
-              new_name="${SAFE_MODEL}__${SAFE_VERSION}__${f}"
-              mv "$f" "$new_name"
-              echo "[*] Prepared: $new_name"
-            fi
-          done
+          if [ -n "$(ls -A .)" ]; then
+            for f in *.img; do
+              mv "$f" "${SAFE_MODEL}__${SAFE_VERSION}__${f}"
+            done
+            echo "[*] 提取成功，准备上传"
+          else
+            echo "[!] 错误：未发现任何 img 文件"
+            exit 1
+          fi
 
       - name: 📤 上传到 Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: firmware_storage
           files: output/*.img
+          # 即使 tag 存在也更新内容
+          append_body: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
