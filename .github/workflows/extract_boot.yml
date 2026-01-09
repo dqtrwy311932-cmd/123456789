@@ -1,4 +1,4 @@
-name: Xiaomi Boot Extractor (Git Push)
+name: Xiaomi Boot Extractor (Release Version)
 
 on:
   workflow_dispatch:
@@ -14,41 +14,40 @@ on:
         required: true
 
 jobs:
-  extract_and_push:
+  extract_and_upload:
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: ⬇️ 检出代码
-        uses: actions/checkout@v4
-
-      - name: 🚀 精准提取镜像
+      - name: 🚀 提取并重命名
         run: |
-          # 1. 准备目录
-          SAFE_MODEL=$(echo "${{ github.event.inputs.model_name }}" | sed 's/ /_/g')
-          SAFE_VERSION=$(echo "${{ github.event.inputs.rom_version }}" | sed 's/ /_/g')
-          TARGET_DIR="firmware/${SAFE_MODEL}/${SAFE_VERSION}"
-          mkdir -p "$TARGET_DIR"
-
-          echo "[*] 正在提取..."
-          # 2. 提取并强制平铺到目标目录
+          mkdir -p output
+          # 提取文件
           curl -L "${{ github.event.inputs.rom_url }}" | tar -zxvf - \
             --wildcards '*/boot.img' '*/init_boot.img' \
             --transform='s|.*/||' \
-            -C "$TARGET_DIR" || echo "部分文件缺失"
+            -C output || echo "Missing files"
 
-      - name: 📤 强制推送同步
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          
-          # 3. 关键改进：添加所有更改（包含固件目录和任何意外出现在根目录的文件）
-          git add .
-          
-          if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "Add: ${{ github.event.inputs.model_name }} ($SAFE_VERSION)"
-            git push origin main --force
-          else
-            echo "没有文件可提交"
-          fi
+          # 格式化名称：将空格转为下划线
+          SAFE_MODEL=$(echo "${{ github.event.inputs.model_name }}" | sed 's/ /_/g')
+          SAFE_VERSION=$(echo "${{ github.event.inputs.rom_version }}" | sed 's/ /_/g')
+
+          # 核心改动：重命名文件为 "机型__版本__文件名.img"
+          # 例如：Xiaomi_12__V14.0.1__boot.img
+          cd output
+          for f in *.img; do
+            if [ -f "$f" ]; then
+              new_name="${SAFE_MODEL}__${SAFE_VERSION}__${f}"
+              mv "$f" "$new_name"
+              echo "[*] Prepared: $new_name"
+            fi
+          done
+
+      - name: 📤 上传到 Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: firmware_storage
+          files: output/*.img
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
