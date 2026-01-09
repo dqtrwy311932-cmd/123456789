@@ -1,4 +1,4 @@
-name: Xiaomi Boot Extractor (Test Mode)
+name: Xiaomi Boot Extractor (Fast Stream)
 
 on:
   workflow_dispatch:
@@ -7,10 +7,10 @@ on:
         description: 'ROM URL'
         required: true
       model_name:
-        description: '機型名稱'
+        description: '机型名称'
         required: true
       rom_version:
-        description: '版本號'
+        description: '版本号'
         required: true
 
 jobs:
@@ -20,43 +20,48 @@ jobs:
       contents: write
 
     steps:
-      - name: 🚀 測試流式提取 (首個匹配即停止)
+      - name: 🚀 捕获目标镜像并停止
         run: |
-          mkdir -p output_test
-          echo "[*] 開始測試流式掃描: ${{ github.event.inputs.rom_url }}"
+          mkdir -p output_sync
+          echo "[*] 开始流式搜索目标..."
           
-          # 1. 使用 --occurrence=1 找到第一個符合 *boot.img 的文件就停止
-          # 使用 --ignore-command-error 忽略因為管道提前關閉導致的 curl 報錯
+          # 1. 核心流式命令：
+          # --exclude='*vendor_boot.img' : 彻底跳过 vendor_boot
+          # --wildcards '*boot.img' : 匹配 boot.img 和 init_boot.img
+          # --occurrence=2 : 匹配到这两个文件后，tar 会自动关闭管道停止下载
+          # 忽略管道中断产生的 curl (23) 或 tar (1) 报错，因为这是我们要的效果
           curl -L "${{ github.event.inputs.rom_url }}" | tar -zxvf - \
+            --exclude='*vendor_boot.img' \
             --wildcards '*boot.img' \
-            --occurrence=1 \
-            || echo "[*] 已捕獲首個目標，管道已中斷 (這是預期行為)"
+            --occurrence=2 \
+            -C . || echo "[*] 目标已捕获，流式传输已主动切断。"
 
-          # 2. 暴力搜索當前目錄，將抓到的文件移入 output_test
-          echo "[*] 正在檢索捕獲的文件..."
-          find . -type f -name "*.img" -exec mv {} output_test/ \;
+          # 2. 深度搜索提取到的镜像
+          find . -maxdepth 10 -type f -name "*.img" -exec mv {} output_sync/ \; 2>/dev/null || true
 
-          # 3. 處理與命名
-          SAFE_MODEL=$(echo "${{ github.event.inputs.model_name }}" | sed 's/ /_/g')
-          SAFE_VERSION=$(echo "${{ github.event.inputs.rom_version }}" | sed 's/ /_/g')
+          # 3. 清洗文件名并准备上传 (解决中文被 GitHub 过滤问题)
+          SAFE_MODEL=$(echo "${{ github.event.inputs.model_name }}" | sed 's/[^a-zA-Z0-9]/_/g' | tr -s '_')
+          SAFE_VERSION=$(echo "${{ github.event.inputs.rom_version }}" | sed 's/[^a-zA-Z0-9.]/_/g' | tr -s '_')
           
-          cd output_test
+          cd output_sync
           if [ -n "$(ls -A .)" ]; then
-            echo "[✓] 測試成功！已捕獲文件:"
+            echo "[✓] 成功捕获镜像列表:"
             for f in *.img; do
-              new_name="${SAFE_MODEL}__${SAFE_VERSION}__${f}"
+              # 保持固定格式供 Python 脚本拆分：DataStart_机型_SPLIT_版本_SPLIT_原文件名
+              new_name="DataStart_${SAFE_MODEL}_SPLIT_${SAFE_VERSION}_SPLIT_${f}"
               mv "$f" "$new_name"
-              ls -lh "$new_name"
+              echo "  -> $new_name"
             done
           else
-            echo "[!] 失敗：未能在流式掃描中捕獲任何鏡像"
+            echo "[!] 失败：未能在 ROM 中发现 boot.img 或 init_boot.img"
             exit 1
           fi
 
-      - name: 📤 上傳到 Release
+      - name: 📤 上传到 Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: firmware_storage
-          files: output_test/*.img
+          files: output_sync/*.img
+          append_body: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
