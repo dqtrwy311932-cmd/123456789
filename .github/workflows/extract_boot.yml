@@ -23,30 +23,35 @@ jobs:
       - name: 🚀 流式提取镜像
         run: |
           mkdir -p output
-          echo "[*] 开始流式扫描 ROM: ${{ github.event.inputs.rom_url }}"
+          mkdir -p temp_run
+          echo "[*] 开始流式扫描: ${{ github.event.inputs.rom_url }}"
           
-          # 使用 curl 下载并直接通过管道传输给 tar
-          # --wildcards 用于匹配文件名
-          # --transform='s|.*/||' 移除所有前置路径，直接放进 output
-          # --ignore-command-error 防止因为部分文件未找到而中断
+          # 1. 管道提取到 temp_run 目录
           curl -L "${{ github.event.inputs.rom_url }}" | tar -zxvf - \
             --wildcards '*boot.img' \
-            --transform='s|.*/||' \
-            -C output/ || echo "[!] 管道提取结束 (部分文件可能已捕获)"
+            -C temp_run/ || echo "[!] 管道传输结束"
 
-          # 检查提取结果
+          # 2. 深度搜索：将所有 img 移动到 output 根目录
+          find temp_run/ -name "*.img" -exec mv {} output/ \;
+
+          # 3. 重命名并清理
           SAFE_MODEL=$(echo "${{ github.event.inputs.model_name }}" | sed 's/ /_/g')
           SAFE_VERSION=$(echo "${{ github.event.inputs.rom_version }}" | sed 's/ /_/g')
           
           cd output
           if [ -n "$(ls -A .)" ]; then
-            echo "[✓] 成功提取以下文件:"
+            echo "[✓] 成功提取文件列表:"
             for f in *.img; do
+              # 排除掉 vendor_boot 等不想要的文件（如果你只需要 boot 和 init_boot）
+              if [[ "$f" == *"vendor_boot"* ]]; then
+                 rm "$f"
+                 continue
+              fi
               mv "$f" "${SAFE_MODEL}__${SAFE_VERSION}__${f}"
               ls -lh "${SAFE_MODEL}__${SAFE_VERSION}__${f}"
             done
           else
-            echo "[!] 错误：流式搜索未发现 boot.img 或 init_boot.img"
+            echo "[!] 错误：未在提取目录中发现有效的 img 文件"
             exit 1
           fi
 
